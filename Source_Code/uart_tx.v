@@ -42,7 +42,7 @@ module uart_tx (
     input           parity_en_i;    // 1 = Parity Enabled
     input           parity_type_i;  // 0 = EVEN, 1 = ODD
     
-	  output          tx_o;           // Serial UART output (idle = 1)
+	output          tx_o;           // Serial UART output (idle = 1)
     output          tx_busy_o;      // 1 while frame is being transmitted
 
     reg tx_o;
@@ -125,28 +125,28 @@ module uart_tx (
                 //-----------------------------------------------------
                 S_DATA: begin
                     //set tx_o to d[0]
-                    tx_o <= data_r[0];
+					tx_o <= data_r[0]; //transmitting LSB(Least Significant Bit) first
                     if (tick_x16_i == 1'b1) begin 
                         if (tick_cnt_r == 4'd15) begin 
-									          tick_cnt_r <= 4'd0;
+						    tick_cnt_r <= 4'd0;
                             //shift data to right by 1 bit
-									          data_r <= (data_r >> 1);
+						    data_r <= (data_r >> 1);
                             if (bit_cnt_r == 3'd7) begin 
                                 //clear bit_cnt to zero
                                 //jump to S_PARITY if parity_en_i enabled
                                 //otherwise, jump to S_STOP1
-										            bit_cnt_r <= 3'd0;
-										            if(parity_en_i) begin 
-												           state <= S_PARITY;
-										            end else begin 
-												           state <= S_STOP1;
-										            end 
+								bit_cnt_r <= 3'd0;
+								if(parity_en_i) begin 
+								   state <= S_PARITY;
+								end else begin 
+								   state <= S_STOP1;
+								end 
                             end else begin 
                                 bit_cnt_r <= bit_cnt_r + 3'd1;
                             end
                         end else begin 
                             //increase tick_cnt
-									          tick_cnt_r <= tick_cnt_r + 4'd1;
+							tick_cnt_r <= tick_cnt_r + 4'd1;
                         end
                     end
                 end
