@@ -1,4 +1,3 @@
-//=============================================================================
 // uart_tx.v  -  UART Transmitter (Parallel-to-Serial)
 //
 // Target : Altera MAX-10 (10M50DAF484C7G), DE10-Lite
@@ -11,7 +10,7 @@
 //
 // ODD parity bit = ~(^data[7:0])
 //   -> total 1s in {data, parity} is always odd.
-//
+
 // State encoding:
 //   S_IDLE   - line high, waiting for tx_start_i
 //   S_START  - transmit start bit (logic 0) for 1 baud period
@@ -38,8 +37,8 @@ module uart_tx (
     input           tick_x16_i;     // 16x baud tick from baud_gen
     input           tx_start_i;     // One-cycle high pulse: latch data & begin TX
     input [7:0]     tx_data_i;      // 8-bit parallel data
-    input           two_stop_i;     // 1 = 2 stop bits
-    input           parity_en_i;    // 1 = Parity Enabled
+    input           two_stop_i;     // 1 = 2 stop bits, 0 = 1 stop bit 
+    input           parity_en_i;    // 1 = Parity Enabled, 0 = Parity Disabled
     input           parity_type_i;  // 0 = EVEN, 1 = ODD
     
 	output          tx_o;           // Serial UART output (idle = 1)
@@ -60,13 +59,13 @@ module uart_tx (
                 S_STOP2   = 3'd5,
                 S_DONE    = 3'd6;
 
-    localparam  EVEN_PARITY_MODE = 1'b0,
-                ODD_PARITY_MODE  = 1'b1;
+    localparam  EVEN_PARITY_MODE = 1'b0, // the total # of 1's in the data are even
+                ODD_PARITY_MODE  = 1'b1; // the total # of 1's in the data are odd
 
     reg [2:0]   state;        // state register - 8 possible states
     reg [7:0]   data_r;       // Shift register (LSB transmitted first)
     reg [3:0]   tick_cnt_r;   // Sub-baud tick counter (0..15 = 1 baud period)
-    reg [2:0]   bit_cnt_r;    // Data bit counter (0..7)
+	reg [2:0]   bit_cnt_r;    // Data bit counter (0..7), keeps track of the 8 data bits being transmitted
     reg         parity_r;     // Computed odd parity bit    
 
     reg         pre_tx_start;
@@ -94,21 +93,21 @@ module uart_tx (
                 S_IDLE: begin
                     tx_o      <= 1'b1;      // Mark idle (line high)
                     tx_busy_o <= 1'b0;
-                    if (!pre_tx_start && tx_start_i) begin             //detect rising-edge on tx_start_i signal
+					if (!pre_tx_start && tx_start_i) begin             // detect rising-edge on tx_start_i signal
                         data_r   <= tx_data_i;
-                        parity_r <= (parity_type_i == ODD_PARITY_MODE) ? 1'b1: 1'b0;
+						parity_r <= (^tx_data_i) ^ parity_type_i;      
                                                                          
                         bit_cnt_r  <= 3'd0;
                         tx_busy_o  <= 1'b1;
                         tick_cnt_r <= 4'd0;
                         
-                        state <= S_START;
+                        state <= S_START; // next state is S_START
                     end 
                 end
 
                 //-----------------------------------------------------
                 S_START: begin
-                    tx_o <= 1'b0; //start bit always equal to 0
+                    tx_o <= 1'b0; // start bit always equal to 0
                     if (tick_x16_i == 1'b1) begin 
                         if(tick_cnt_r == 4'd15) begin 
                             //reset tick_cnt_r to zero
@@ -125,13 +124,12 @@ module uart_tx (
                 //-----------------------------------------------------
                 S_DATA: begin
                     //set tx_o to d[0]
-					tx_o <= data_r[0]; //transmitting LSB(Least Significant Bit) first
+					tx_o <= data_r[0]; // transmitting LSB(Least Significant Bit) first
                     if (tick_x16_i == 1'b1) begin 
                         if (tick_cnt_r == 4'd15) begin 
 						    tick_cnt_r <= 4'd0;
-                            //shift data to right by 1 bit
-						    data_r <= (data_r >> 1);
-                            if (bit_cnt_r == 3'd7) begin 
+							data_r <= (data_r >> 1); // shift each bit to the right by 1 so the next data bit is the new LSB
+							if (bit_cnt_r == 3'd7) begin //
                                 //clear bit_cnt to zero
                                 //jump to S_PARITY if parity_en_i enabled
                                 //otherwise, jump to S_STOP1
@@ -174,12 +172,12 @@ module uart_tx (
                     //if tick_cnt_r == 15
                     //  --> check stop_bits, if stop_bit == 0 -> jump to S_DONE
                     //                       otherwise, jump to S_STOP2
-					 	        tx_o <= 1'b1;
+					tx_o <= 1'b1; // stop bit needs to be pulled high 
                 
                     if (tick_x16_i) begin
                         if (tick_cnt_r == 4'd15) begin
                             tick_cnt_r <= 4'd0;
-                            state <= two_stop_i ? S_STOP2 : S_DONE;
+							state <= two_stop_i ? S_STOP2 : S_DONE; // if stop_i is high(1) next state is S_STOP2, otherwise next state is S_DONE
                         end else begin
                             tick_cnt_r <= tick_cnt_r + 4'd1;
                         end
@@ -190,7 +188,7 @@ module uart_tx (
                 S_STOP2: begin
                     //sent 1 to tx
                     //if tick_cnt_r == 15, jump to S_DONE
-						        tx_o <= 1'b1;
+						        tx_o <= 1'b1; // stop bit needs to be pulled high 
 						  
 						        if (tick_x16_i) begin
                         if (tick_cnt_r == 4'd15) begin
@@ -209,7 +207,7 @@ module uart_tx (
 						        tx_o      <= 1'b1;
 						        tx_busy_o <= 1'b0;
 						  
-						       state <= S_IDLE;
+						       state <= S_IDLE; // next state is S_IDLE
                 end
                 //-----------------------------------------------------
                 default: begin
