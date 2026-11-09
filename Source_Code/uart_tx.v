@@ -134,7 +134,7 @@ module uart_tx (
                                 //jump to S_PARITY if parity_en_i enabled
                                 //otherwise, jump to S_STOP1
 								bit_cnt_r <= 3'd0;
-								if(parity_en_i) begin 
+								if(parity_en_i == 1'b1) begin 
 								   state <= S_PARITY;
 								end else begin 
 								   state <= S_STOP1;
@@ -177,7 +177,7 @@ module uart_tx (
                     if (tick_x16_i) begin
                         if (tick_cnt_r == 4'd15) begin
                             tick_cnt_r <= 4'd0;
-							state <= two_stop_i ? S_STOP2 : S_DONE; // if stop_i is high(1) next state is S_STOP2, otherwise next state is S_DONE
+							state <= (two_stop_i == 1'b1) ? S_STOP2 : S_DONE; // if stop_i is high(1) next state is S_STOP2, otherwise next state is S_DONE
                         end else begin
                             tick_cnt_r <= tick_cnt_r + 4'd1;
                         end
