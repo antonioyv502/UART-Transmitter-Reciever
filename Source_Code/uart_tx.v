@@ -1,24 +1,29 @@
-// uart_tx.v  -  UART Transmitter (Parallel-to-Serial)
+
+//=============================================================================
+// uart_tx.v - UART Transmitter (Parallel-to-Serial)
 //
-// Target : Altera MAX-10 (10M50DAF484C7G), DE10-Lite
+// Target: Altera MAX-10 (10M50DAF484C7G), DE10-Lite
 //
-// Frame format:
+// Frame Format:
 //   [START(0)] [D0..D7] [PARITY(opt)] [STOP x1 or x2 (1)]
 //
 // The module counts 16 x16-baud ticks per bit period, matching the
 // oversampling ratio produced by baud_gen.v.
 //
-// ODD parity bit = ~(^data[7:0])
-//   -> total 1s in {data, parity} is always odd.
-
-// State encoding:
-//   S_IDLE   - line high, waiting for tx_start_i
-//   S_START  - transmit start bit (logic 0) for 1 baud period
-//   S_DATA   - transmit 8 data bits (LSB first)
-//   S_PARITY - transmit odd parity bit (when parity_en_i = 1)
-//   S_STOP1  - transmit first stop bit (logic 1)
-//   S_STOP2  - transmit second stop bit (when two_stop_i = 1)
+// Parity Modes:
+//   EVEN parity = total number of 1s (data + parity) is even
+//   ODD parity  = total number of 1s (data + parity) is odd
+//
+// FSM States:
+//   S_IDLE   - Line high, waiting for tx_start_i
+//   S_START  - Transmit start bit (logic 0) for 1 baud period 
+//   S_DATA   - Transmit 8 data bits (LSB first)
+//   S_PARITY - Transmit parity bit (when parity_en_i = 1)
+//   S_STOP1  - Transmit first stop bit (logic 1)
+//   S_STOP2  - Transmit second stop bit (when two_stop_i = 1)
+//   S_DONE   - Transmission complete, return to IDLE
 //=============================================================================
+
 module uart_tx (
     clk_i,
     rst_ni,
@@ -32,47 +37,53 @@ module uart_tx (
     tx_busy_o
 );
 
-    input           clk_i;           
-    input           rst_ni;         // active-low reset 
+    //-------------------------------------------------------------------------
+    // Input and Output Declarations
+    //-------------------------------------------------------------------------
+
+    input           clk_i;
+    input           rst_ni;         // Active-low reset
     input           tick_x16_i;     // 16x baud tick from baud_gen
-    input           tx_start_i;     // One-cycle high pulse: latch data & begin TX
-    input [7:0]     tx_data_i;      // 8-bit parallel data
-    input           two_stop_i;     // 1 = 2 stop bits, 0 = 1 stop bit 
-    input           parity_en_i;    // 1 = Parity Enabled, 0 = Parity Disabled
+    input           tx_start_i;     // One-cycle pulse to begin transmission
+    input  [7:0]    tx_data_i;      // 8-bit parallel data
+    input           two_stop_i;     // 1 = 2 stop bits, 0 = 1 stop bit
+    input           parity_en_i;    // 1 = Enabled, 0 = Disabled
     input           parity_type_i;  // 0 = EVEN, 1 = ODD
-    
-	output          tx_o;           // Serial UART output (idle = 1)
-    output          tx_busy_o;      // 1 while frame is being transmitted
 
-    reg tx_o;
-    reg tx_busy_o;
+    output          tx_o;           // Serial UART output (idle = 1)
+    output          tx_busy_o;      // 1 while transmitting
 
-    //---------------------------------------------------------
-    // State encoding (one-hot friendly, 3-bit binary used here)
-    //---------------------------------------------------------
+    reg             tx_o;
+    reg             tx_busy_o;
+
+    //-------------------------------------------------------------------------
+    // FSM State Encoding
+    //-------------------------------------------------------------------------
+
     localparam [2:0]
-                S_IDLE    = 3'd0,
-                S_START   = 3'd1,
-                S_DATA    = 3'd2,
-                S_PARITY  = 3'd3,
-                S_STOP1   = 3'd4,
-                S_STOP2   = 3'd5,
-                S_DONE    = 3'd6;
+        S_IDLE   = 3'd0,
+        S_START  = 3'd1,
+        S_DATA   = 3'd2,
+        S_PARITY = 3'd3,
+        S_STOP1  = 3'd4,
+        S_STOP2  = 3'd5,
+        S_DONE   = 3'd6;
 
-    localparam  EVEN_PARITY_MODE = 1'b0, // the total # of 1's in the data are even
-                ODD_PARITY_MODE  = 1'b1; // the total # of 1's in the data are odd
+    localparam EVEN_PARITY_MODE = 1'b0; // the total # of 1's in the data are even
+    localparam ODD_PARITY_MODE  = 1'b1; // the total # of 1's in the data are odd 
 
-    reg [2:0]   state;        // state register - 8 possible states
-    reg [7:0]   data_r;       // Shift register (LSB transmitted first)
-    reg [3:0]   tick_cnt_r;   // Sub-baud tick counter (0..15 = 1 baud period)
-	reg [2:0]   bit_cnt_r;    // Data bit counter (0..7), keeps track of the 8 data bits being transmitted
-    reg         parity_r;     // Computed odd parity bit    
+  
+	reg [2:0] state;         // Current FSM state(8 possible states)
+    reg [7:0] data_r;        // Shift register (LSB transmitted first)
+	reg [3:0] tick_cnt_r;    // Counts 16 baud ticks (0 to 15 = 1 baud period)
+	reg [2:0] bit_cnt_r;     // Counts 8 data bits (0 to 7), keeps track of the 8 data bits being transmitted 
+    reg       parity_r;      // Computed parity bit
+    reg       pre_tx_start;  // Previous tx_start_i value
 
-    reg         pre_tx_start;
-    
-    //---------------------------------------------------------
-    // Transmitter state machine
-    //---------------------------------------------------------
+    //-------------------------------------------------------------------------
+    // UART Transmitter FSM
+    //-------------------------------------------------------------------------
+
     always @(posedge clk_i or negedge rst_ni) begin
         if (!rst_ni) begin
             state        <= S_IDLE;
@@ -82,137 +93,142 @@ module uart_tx (
             bit_cnt_r    <= 3'd0;
             tick_cnt_r   <= 4'd0;
             parity_r     <= 1'b0;
-            pre_tx_start <= 1'b0;  
+            pre_tx_start <= 1'b0; 
         end else begin
-            pre_tx_start <= tx_start_i;  // store previous state
-            
-
+            // Store previous tx_start_i for rising-edge detection
+            pre_tx_start <= tx_start_i;
+			
             case (state)
 
-                //-----------------------------------------------------
+                //-------------------------------------------------------------
+                // IDLE: Wait for a transmission request
+                //-------------------------------------------------------------
                 S_IDLE: begin
-                    tx_o      <= 1'b1;      // Mark idle (line high)
-                    tx_busy_o <= 1'b0;
-					if (!pre_tx_start && tx_start_i) begin             // detect rising-edge on tx_start_i signal
-                        data_r   <= tx_data_i;
-						parity_r <= (^tx_data_i) ^ parity_type_i;      
-                                                                         
-                        bit_cnt_r  <= 3'd0;
-                        tx_busy_o  <= 1'b1;
-                        tick_cnt_r <= 4'd0;
-                        
+                    tx_o      <= 1'b1; // Mark idle (line high)
+                    tx_busy_o <= 1'b0; // 
+                    // Detect rising edge of tx_start_i
+					if (!pre_tx_start && tx_start_i) begin 
+                        data_r      <= tx_data_i;
+                        parity_r    <= (^tx_data_i) ^ parity_type_i;
+                        bit_cnt_r   <= 3'd0;
+                        tick_cnt_r  <= 4'd0;
+                        tx_busy_o   <= 1'b1;  
+
                         state <= S_START; // next state is S_START
-                    end 
+                    end
                 end
 
-                //-----------------------------------------------------
+                //-------------------------------------------------------------
+                // START: Transmit start bit (logic 0)
+                //-------------------------------------------------------------
                 S_START: begin
-                    tx_o <= 1'b0; // start bit always equal to 0
-                    if (tick_x16_i == 1'b1) begin 
-                        if(tick_cnt_r == 4'd15) begin 
-                            //reset tick_cnt_r to zero
-                            //jump to next state
+
+                    tx_o <= 1'b0; // starts bit always equal to zero 
+
+                    if (tick_x16_i == 1'b1) begin
+
+                        if (tick_cnt_r == 4'd15) begin
                             tick_cnt_r <= 4'd0;
-                            state <= S_DATA;
-                        end else begin 
-                            //increase tick_cnt by 1
+                            state      <= S_DATA; // next state is S_DATA
+                        end else begin
                             tick_cnt_r <= tick_cnt_r + 4'd1;
-                        end 
-                    end 
+                        end
+                    end
                 end
 
-                //-----------------------------------------------------
+                //-------------------------------------------------------------
+                // DATA: Transmit 8 data bits (LSB first)
+                //-------------------------------------------------------------
                 S_DATA: begin
-                    //set tx_o to d[0]
-					tx_o <= data_r[0]; // transmitting LSB(Least Significant Bit) first
-                    if (tick_x16_i == 1'b1) begin 
-                        if (tick_cnt_r == 4'd15) begin 
-						    tick_cnt_r <= 4'd0;
-							data_r <= (data_r >> 1); // shift each bit to the right by 1 so the next data bit is the new LSB
-							if (bit_cnt_r == 3'd7) begin //
-                                //clear bit_cnt to zero
-                                //jump to S_PARITY if parity_en_i enabled
-                                //otherwise, jump to S_STOP1
-								bit_cnt_r <= 3'd0;
-								if(parity_en_i == 1'b1) begin 
-								   state <= S_PARITY;
-								end else begin 
-								   state <= S_STOP1;
-								end 
-                            end else begin 
+                    // Transmit the current LSB
+                    tx_o <= data_r[0];
+
+                    if (tick_x16_i == 1'b1) begin
+                        if (tick_cnt_r == 4'd15) begin
+                            tick_cnt_r <= 4'd0;
+                            // Shift right by 1 to make next data bit the new LSB
+                            data_r <= data_r >> 1;
+                            // Check if all 8 data bits have been transmitted
+                            if (bit_cnt_r == 3'd7) begin
+                                bit_cnt_r <= 3'd0;
+
+                                // Determine whether parity is enabled
+                                if (parity_en_i == 1'b1) begin
+                                    state <= S_PARITY; // next state is S_PARRITY if parity_en_i is enabled 
+                                end else begin
+                                    state <= S_STOP1; // next state is S_STOP1 if parity_en_i is not enabled
+                                end
+                            end else begin
                                 bit_cnt_r <= bit_cnt_r + 3'd1;
                             end
-                        end else begin 
-                            //increase tick_cnt
-							tick_cnt_r <= tick_cnt_r + 4'd1;
+                        end else begin
+                            tick_cnt_r <= tick_cnt_r + 4'd1;
                         end
                     end
                 end
 
-                //-----------------------------------------------------
+                //-------------------------------------------------------------
+                // PARITY: Transmit optional parity bit
+                //-------------------------------------------------------------
                 S_PARITY: begin
-                    //send parity to tx
-                    //if tick_cnt_r == 15, jump to S_STOP1
-						  
-						        tx_o <= parity_r;
-						  
-						        if (tick_x16_i) begin
+                    tx_o <= parity_r;
+                    if (tick_x16_i == 1'b1) begin
                         if (tick_cnt_r == 4'd15) begin
                             tick_cnt_r <= 4'd0;
-                            state <= S_STOP1;
+                            state      <= S_STOP1; // next state is S_STOP1
                         end else begin
                             tick_cnt_r <= tick_cnt_r + 4'd1;
                         end
                     end
                 end
 
-                //-----------------------------------------------------
+                //-------------------------------------------------------------
+                // STOP1: Transmit first stop bit (logic 1)
+                //-------------------------------------------------------------
                 S_STOP1: begin
-                    //sent 1 to tx
-                    //if tick_cnt_r == 15
-                    //  --> check stop_bits, if stop_bit == 0 -> jump to S_DONE
-                    //                       otherwise, jump to S_STOP2
-					tx_o <= 1'b1; // stop bit needs to be pulled high 
-                
-                    if (tick_x16_i) begin
+                    tx_o <= 1'b1; // stop bit needs to be pulled high 
+                    if (tick_x16_i == 1'b1) begin
                         if (tick_cnt_r == 4'd15) begin
                             tick_cnt_r <= 4'd0;
-							state <= (two_stop_i == 1'b1) ? S_STOP2 : S_DONE; // if stop_i is high(1) next state is S_STOP2, otherwise next state is S_DONE
+                            // Select one or two stop bits
+							state <= (two_stop_i == 1'b1) ? S_STOP2 : S_DONE; // // if two_stop_i is high(1) next state is S_STOP2, otherwise next state is S_DONE
                         end else begin
                             tick_cnt_r <= tick_cnt_r + 4'd1;
                         end
                     end
                 end
 
-                //-----------------------------------------------------
+                //-------------------------------------------------------------
+                // STOP2: Transmit second stop bit (logic 1)
+                //-------------------------------------------------------------
                 S_STOP2: begin
-                    //sent 1 to tx
-                    //if tick_cnt_r == 15, jump to S_DONE
-						        tx_o <= 1'b1; // stop bit needs to be pulled high 
-						  
-						        if (tick_x16_i) begin
+                    tx_o <= 1'b1; // stop bit needs to be pulled high
+                    if (tick_x16_i == 1'b1) begin
                         if (tick_cnt_r == 4'd15) begin
                             tick_cnt_r <= 4'd0;
-                            state <= S_DONE;
+                            state      <= S_DONE; // next state is S_DONE
                         end else begin
                             tick_cnt_r <= tick_cnt_r + 4'd1;
                         end
                     end
                 end
 
+                //-------------------------------------------------------------
+                // DONE: Transmission complete
+                //-------------------------------------------------------------
                 S_DONE: begin
-                    // set tx to 1
-                    //reset tx busy to 0
-                    //jump to S_IDLE
-						        tx_o      <= 1'b1;
-						        tx_busy_o <= 1'b0;
-						  
-						       state <= S_IDLE; // next state is S_IDLE
+                    tx_o      <= 1'b1; // 
+                    tx_busy_o <= 1'b0; // 
+
+                    state <= S_IDLE; // next state is S_IDLE
                 end
-                //-----------------------------------------------------
+				
+                //-------------------------------------------------------------
+                // Default State
+                //-------------------------------------------------------------
                 default: begin
-						      state <= S_IDLE;
-					      end
+                    state <= S_IDLE;
+                end
             endcase
         end
     end
