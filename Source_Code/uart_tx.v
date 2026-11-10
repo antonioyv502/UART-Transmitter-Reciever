@@ -5,7 +5,7 @@
 // Target: Altera MAX-10 (10M50DAF484C7G), DE10-Lite
 //
 // Frame Format:
-//   [START(0)] [D0..D7] [PARITY(opt)] [STOP x1 or x2 (1)]
+//   [IDLE(1] [START(0)] [D0..D7] [PARITY(opt)] [STOP x1 or x2 (1)] [DONE]
 //
 // The module counts 16 x16-baud ticks per bit period, matching the
 // oversampling ratio produced by baud_gen.v.
@@ -85,7 +85,7 @@ module uart_tx (
     //-------------------------------------------------------------------------
 
     always @(posedge clk_i or negedge rst_ni) begin
-        if (!rst_ni) begin
+		if (!rst_ni) begin // asynchronous active-low reset 
             state        <= S_IDLE;
             tx_o         <= 1'b1;
             tx_busy_o    <= 1'b0;
@@ -109,7 +109,7 @@ module uart_tx (
                     // Detect rising edge of tx_start_i
 					if (!pre_tx_start && tx_start_i) begin 
                         data_r      <= tx_data_i;
-                        parity_r    <= (^tx_data_i) ^ parity_type_i;
+						parity_r    <= (^tx_data_i) ^ parity_type_i; // reduction XOR to produce a single bit 
                         bit_cnt_r   <= 3'd0;
                         tick_cnt_r  <= 4'd0;
                         tx_busy_o   <= 1'b1;  
@@ -126,7 +126,6 @@ module uart_tx (
                     tx_o <= 1'b0; // starts bit always equal to zero 
 
                     if (tick_x16_i == 1'b1) begin
-
                         if (tick_cnt_r == 4'd15) begin
                             tick_cnt_r <= 4'd0;
                             state      <= S_DATA; // next state is S_DATA
